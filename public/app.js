@@ -329,7 +329,30 @@ function ingestThread(thread) {
 
 function upsertItem(item) {
   if (!item?.id) return;
+  if (item.type === "userMessage" && !String(item.id).startsWith("local-")) {
+    removeMatchingLocalUserMessage(item);
+  }
   state.items.set(item.id, item);
+}
+
+function removeMatchingLocalUserMessage(item) {
+  const incoming = userMessageSignature(item);
+  for (const [id, existing] of state.items) {
+    if (!String(id).startsWith("local-") || existing.type !== "userMessage") continue;
+    if (userMessageSignature(existing) === incoming) {
+      state.items.delete(id);
+      return;
+    }
+  }
+}
+
+function userMessageSignature(item) {
+  return (item.content || []).map((part) => {
+    if (part.type === "text") return `text:${String(part.text || "").trim()}`;
+    if (part.type === "image") return `image:${part.url || ""}`;
+    if (part.type === "localImage") return `localImage:${part.path || ""}`;
+    return `${part.type}:${part.name || part.path || ""}`;
+  }).join("|");
 }
 
 function appendDelta(itemId, type, delta) {
@@ -442,13 +465,37 @@ function renderBody(item) {
   if (item.type === "agentMessage" || item.type === "plan") return markdown(item.text || "");
   if (item.type === "reasoning") return markdown([...(item.summary || []), ...(item.content || [])].join("\n"));
   if (item.type === "commandExecution") {
-    return `${markdown(item.command || "")}<pre>${escapeHtml(item.aggregatedOutput || "")}</pre>`;
+    return collapsedBlock(
+      item.status ? `Command · ${item.status}` : "Command",
+      item.command || "",
+      item.aggregatedOutput || ""
+    );
   }
-  if (item.type === "fileChange") return `<pre>${escapeHtml(compactJson(item.changes || item))}</pre>`;
-  if (item.type === "mcpToolCall") return `<pre>${escapeHtml(compactJson({ server: item.server, tool: item.tool, status: item.status, result: item.result, error: item.error }))}</pre>`;
-  if (item.type === "dynamicToolCall") return `<pre>${escapeHtml(compactJson({ tool: item.tool, status: item.status, success: item.success, contentItems: item.contentItems }))}</pre>`;
+  if (item.type === "fileChange") {
+    return collapsedBlock("File change", "", compactJson(item.changes || item));
+  }
+  if (item.type === "mcpToolCall") {
+    return collapsedBlock(
+      `MCP · ${item.server || ""}/${item.tool || ""}`,
+      item.status || "",
+      compactJson({ arguments: item.arguments, result: item.result, error: item.error })
+    );
+  }
+  if (item.type === "dynamicToolCall") {
+    return collapsedBlock(
+      `Tool · ${item.tool || ""}`,
+      item.status || "",
+      compactJson({ arguments: item.arguments, success: item.success, contentItems: item.contentItems })
+    );
+  }
   if (item.type === "webSearch") return markdown(item.query || "");
-  return `<pre>${escapeHtml(compactJson(item))}</pre>`;
+  return collapsedBlock(item.type || "Item", "", compactJson(item));
+}
+
+function collapsedBlock(title, subtitle, body) {
+  const safeSubtitle = subtitle ? `<div class="tool-subtitle">${escapeHtml(subtitle)}</div>` : "";
+  const safeBody = body ? `<pre>${escapeHtml(body)}</pre>` : "";
+  return `<details class="tool-details"><summary>${escapeHtml(title)}</summary>${safeSubtitle}${safeBody}</details>`;
 }
 
 function renderApprovals() {
