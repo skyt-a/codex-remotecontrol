@@ -348,7 +348,7 @@ function removeQueuedMessage(id) {
 }
 
 function isBusy() {
-  return Boolean(state.activeTurnId || state.turnPending);
+  return Boolean(state.activeTurnId || state.turnPending || state.approvals.size > 0);
 }
 
 function nextLocalId(prefix) {
