@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { internals } from "../server/app.mjs";
+import { CodexBridge } from "../server/codexBridge.mjs";
 import { redactToken } from "../server/config.mjs";
 
 test("buildTurnParams maps text and image inputs", () => {
@@ -51,4 +52,21 @@ test("local image preview only accepts absolute raster image paths", () => {
   assert.equal(internals.localImageContentType("/tmp/example.png"), "image/png");
   assert.equal(internals.localImageContentType("/tmp/example.jpeg"), "image/jpeg");
   assert.equal(internals.localImageContentType("/tmp/example.svg"), "");
+});
+
+test("bridge status tracks active turns across notification shapes", () => {
+  const bridge = new CodexBridge({ skipCodex: true, codexWsUrl: "ws://127.0.0.1:45213" });
+  bridge.rememberNotification({
+    method: "turn/started",
+    params: { turn: { id: "turn-1", threadId: "thread-1" } }
+  });
+
+  assert.deepEqual(bridge.getStatus().activeTurns, [{ threadId: "thread-1", turnId: "turn-1" }]);
+
+  bridge.rememberNotification({
+    method: "turn/completed",
+    params: { turnId: "turn-1" }
+  });
+
+  assert.deepEqual(bridge.getStatus().activeTurns, []);
 });
