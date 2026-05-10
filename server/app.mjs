@@ -1,10 +1,18 @@
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer } from "node:http";
-import { extname, join, normalize, resolve } from "node:path";
+import { extname, isAbsolute, join, normalize, resolve } from "node:path";
 import { URL } from "node:url";
 import { redactToken, VERSION } from "./config.mjs";
 
 const MAX_BODY_BYTES = 12 * 1024 * 1024;
+const LOCAL_IMAGE_MIME_TYPES = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".avif": "image/avif"
+};
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -14,7 +22,9 @@ const MIME_TYPES = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
   ".webp": "image/webp",
+  ".avif": "image/avif",
   ".ico": "image/x-icon"
 };
 
@@ -58,6 +68,11 @@ export function createRemoteControlServer({ bridge, config }) {
 }
 
 async function routeApi(req, res, url, bridge, config, clients) {
+  if (req.method === "GET" && url.pathname === "/api/local-image") {
+    serveLocalImage(req, res, url);
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/status") {
     sendJson(res, 200, {
       app: {
@@ -184,6 +199,51 @@ async function routeApi(req, res, url, bridge, config, clients) {
   }
 
   sendJson(res, 404, { error: "Not found." });
+}
+
+function serveLocalImage(req, res, url) {
+  const imagePath = url.searchParams.get("path") || "";
+  const filePath = resolveLocalImagePath(imagePath);
+  if (!filePath) {
+    sendJson(res, 400, { error: "A valid absolute image path is required." });
+    return;
+  }
+
+  const type = localImageContentType(filePath);
+  if (!type) {
+    sendJson(res, 415, { error: "Only raster image files can be previewed." });
+    return;
+  }
+
+  let stats;
+  try {
+    stats = statSync(filePath);
+  } catch {
+    sendJson(res, 404, { error: "Image file was not found." });
+    return;
+  }
+
+  if (!stats.isFile()) {
+    sendJson(res, 404, { error: "Image file was not found." });
+    return;
+  }
+
+  res.writeHead(200, {
+    "content-type": type,
+    "content-length": stats.size,
+    "cache-control": "private, max-age=60"
+  });
+  createReadStream(filePath).pipe(res);
+}
+
+function resolveLocalImagePath(imagePath) {
+  const trimmed = String(imagePath || "").trim();
+  if (!trimmed || !isAbsolute(trimmed)) return "";
+  return resolve(trimmed);
+}
+
+function localImageContentType(filePath) {
+  return LOCAL_IMAGE_MIME_TYPES[extname(filePath).toLowerCase()] || "";
 }
 
 function buildThreadParams(body, defaultCwd) {
@@ -399,5 +459,7 @@ export const internals = {
   isThreadNotFound,
   buildApprovalResponse,
   stripNulls,
-  isAuthorized
+  isAuthorized,
+  resolveLocalImagePath,
+  localImageContentType
 };
