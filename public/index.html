@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Codex RemoteControl</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <header class="brand">
+          <div>
+            <h1>Codex RemoteControl</h1>
+            <p id="bridgeState">offline</p>
+          </div>
+          <button id="refreshButton" class="icon-button" title="Refresh">R</button>
+        </header>
+
+        <section id="tokenPanel" class="panel hidden">
+          <label for="tokenInput">Access token</label>
+          <div class="row">
+            <input id="tokenInput" type="password" autocomplete="off">
+            <button id="saveTokenButton">Save</button>
+          </div>
+        </section>
+
+        <section class="panel controls">
+          <div class="row">
+            <button id="newThreadButton">New</button>
+            <button id="startThreadButton">Start</button>
+          </div>
+          <label for="cwdInput">Working directory</label>
+          <input id="cwdInput" spellcheck="false">
+
+          <label for="modelSelect">Model</label>
+          <select id="modelSelect">
+            <option value="">Default</option>
+          </select>
+
+          <div class="settings-grid">
+            <label>
+              Approval
+              <select id="approvalSelect">
+                <option value="on-request">on-request</option>
+                <option value="on-failure">on-failure</option>
+                <option value="untrusted">untrusted</option>
+                <option value="never">never</option>
+              </select>
+            </label>
+            <label>
+              Sandbox
+              <select id="sandboxSelect">
+                <option value="workspace-write">workspace-write</option>
+                <option value="read-only">read-only</option>
+                <option value="danger-full-access">danger-full-access</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section class="panel thread-panel">
+          <div class="row">
+            <input id="threadSearch" placeholder="Search threads">
+            <button id="threadSearchButton">Go</button>
+          </div>
+          <div id="threadList" class="thread-list"></div>
+        </section>
+      </aside>
+
+      <main class="workspace">
+        <header class="workspace-header">
+          <div>
+            <p class="eyebrow">Active thread</p>
+            <h2 id="threadTitle">No thread selected</h2>
+          </div>
+          <div class="row header-actions">
+            <button id="resumeButton">Resume</button>
+            <button id="interruptButton" class="danger">Interrupt</button>
+          </div>
+        </header>
+
+        <section id="transcript" class="transcript" aria-live="polite"></section>
+
+        <form id="composer" class="composer">
+          <div id="attachmentList" class="attachments"></div>
+          <textarea id="messageInput" rows="4" placeholder="Message Codex"></textarea>
+          <div class="composer-actions">
+            <input id="imageInput" class="hidden-input" type="file" accept="image/*" multiple>
+            <button id="attachButton" type="button">Attach</button>
+            <button id="clearImagesButton" type="button">Clear</button>
+            <button id="sendButton" type="submit">Send</button>
+          </div>
+        </form>
+      </main>
+
+      <aside class="activity">
+        <section class="panel approval-panel">
+          <div class="section-title">
+            <h2>Approvals</h2>
+            <span id="approvalCount">0</span>
+          </div>
+          <div id="approvalList" class="approval-list"></div>
+        </section>
+
+        <section class="panel log-panel">
+          <div class="section-title">
+            <h2>Live log</h2>
+            <button id="clearLogButton" class="quiet">Clear</button>
+          </div>
+          <div id="logList" class="log-list"></div>
+        </section>
+      </aside>
+    </div>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

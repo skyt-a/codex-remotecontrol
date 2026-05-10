@@ -1,0 +1,24 @@
+{
+  "name": "codex-remotecontrol",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "A token-protected mobile-friendly web controller for Codex app-server sessions.",
+  "scripts": {
+    "start": "node server/index.mjs",
+    "phone": "node server/index.mjs",
+    "check": "node --check server/index.mjs && node --check server/app.mjs && node --check server/codexBridge.mjs && node --check server/config.mjs && node --check public/app.js && node --test tests/*.test.mjs",
+    "build": "npm run check",
+    "server:smoke": "node --test tests/smoke.test.mjs"
+  },
+  "keywords": [
+    "codex",
+    "remote-control",
+    "app-server",
+    "openai"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

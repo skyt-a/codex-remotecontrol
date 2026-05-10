@@ -1,0 +1,10 @@
+.DS_Store
+.gitdata/
+node_modules/
+.phone-token
+.tmp-codex-protocol/
+.uploads/
+.codex-remotecontrol/
+npm-debug.log*
+coverage/
+dist/
