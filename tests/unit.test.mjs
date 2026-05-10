@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { internals } from "../server/app.mjs";
+import { AwakeController } from "../server/awake.mjs";
 import { CodexBridge } from "../server/codexBridge.mjs";
 import { redactToken } from "../server/config.mjs";
 
@@ -69,4 +71,38 @@ test("bridge status tracks active turns across notification shapes", () => {
   });
 
   assert.deepEqual(bridge.getStatus().activeTurns, []);
+});
+
+test("awake controller starts and stops caffeinate on macOS", () => {
+  const calls = [];
+  class FakeChild extends EventEmitter {
+    constructor() {
+      super();
+      this.pid = 1234;
+      this.killed = false;
+    }
+
+    kill(signal) {
+      this.killed = true;
+      calls.push(["kill", signal]);
+    }
+  }
+
+  const child = new FakeChild();
+  const awake = new AwakeController({
+    platform: "darwin",
+    spawnFn(command, args, options) {
+      calls.push([command, args, options]);
+      return child;
+    }
+  });
+
+  const status = awake.start();
+  assert.equal(status.enabled, true);
+  assert.equal(status.pid, 1234);
+  assert.deepEqual(calls[0], ["caffeinate", ["-ims"], { stdio: "ignore" }]);
+
+  const stopped = awake.stop();
+  assert.equal(stopped.enabled, false);
+  assert.deepEqual(calls[1], ["kill", "SIGTERM"]);
 });
