@@ -723,7 +723,7 @@ function flashButton(button, label) {
 }
 
 function renderInlineImage(part) {
-  const src = safeImageSource(part?.url || part?.image_url || part?.data_url || part?.src);
+  const src = imageSource(part?.url || part?.image_url || part?.data_url || part?.src || part?.path);
   const label = part?.name || part?.path || "image";
   if (!src) return `<span class="badge">${escapeHtml(label)}</span>`;
   return `<figure class="inline-image"><img src="${escapeHtml(src)}" alt="${escapeHtml(label)}"><figcaption>${escapeHtml(label)}</figcaption></figure>`;
@@ -740,7 +740,7 @@ function collectImages(value, seen = new Set()) {
   seen.add(value);
 
   const found = [];
-  const src = safeImageSource(value.url || value.image_url || value.data_url || value.src);
+  const src = imageSource(value.url || value.image_url || value.data_url || value.src || value.path);
   if (src) found.push({ url: src, name: value.name || value.path || "image" });
 
   const entries = Array.isArray(value) ? value : Object.values(value);
@@ -755,12 +755,39 @@ function collectImages(value, seen = new Set()) {
   return [...unique.values()];
 }
 
+function imageSource(value) {
+  const remote = safeImageSource(value);
+  if (remote) return remote;
+  const localPath = localImagePath(value);
+  if (!localPath) return "";
+  return `/api/local-image?token=${encodeURIComponent(state.token)}&path=${encodeURIComponent(localPath)}`;
+}
+
 function safeImageSource(value) {
   const src = String(value || "");
   if (/^data:image\/[a-z0-9.+-]+;base64,/i.test(src)) return src;
   if (/^https?:\/\//i.test(src)) return src;
   if (/^blob:/i.test(src)) return src;
+  if (/^\/api\/local-image\?/i.test(src)) return src;
   return "";
+}
+
+function localImagePath(value) {
+  const src = String(value || "").trim();
+  if (!isImagePath(src)) return "";
+  if (src.startsWith("/")) return src;
+  if (/^file:\/\//i.test(src)) {
+    try {
+      return decodeURIComponent(new URL(src).pathname);
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+function isImagePath(value) {
+  return /\.(png|jpe?g|gif|webp|avif)(?:[?#].*)?$/i.test(String(value || "").trim());
 }
 
 function renderApprovals() {
@@ -969,9 +996,22 @@ function markdown(text) {
   const escaped = escapeHtml(text || "");
   const withBlocks = escaped.replace(/```([\s\S]*?)```/g, (_, code) => `<pre>${code.trim()}</pre>`);
   return withBlocks
+    .replace(/!?\[([^\]]+)\]\(([^)]+)\)/g, renderMarkdownLink)
     .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+}
+
+function renderMarkdownLink(match, label, target) {
+  const rawLabel = unescapeHtml(label);
+  const rawTarget = unescapeHtml(target);
+  if (isImagePath(rawTarget)) {
+    const src = imageSource(rawTarget);
+    if (src) return renderInlineImage({ url: src, name: rawLabel });
+  }
+  if (/^https?:\/\//i.test(rawTarget)) {
+    return `<a href="${escapeHtml(rawTarget)}" target="_blank" rel="noreferrer">${label}</a>`;
+  }
+  return match;
 }
 
 function escapeHtml(value) {
@@ -981,6 +1021,15 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function unescapeHtml(value) {
+  return String(value)
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#039;", "'")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&amp;", "&");
 }
 
 function parseOptionalJson(text) {
