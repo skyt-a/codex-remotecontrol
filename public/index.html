@@ -75,6 +75,14 @@
             <h2 id="threadTitle">No thread selected</h2>
           </div>
           <div class="row header-actions">
+            <div id="thinkingIndicator" class="thinking-indicator hidden" role="status" aria-live="polite">
+              <span>Thinking</span>
+              <span class="thinking-dots" aria-hidden="true">
+                <span></span>
+                <span></span>
+                <span></span>
+              </span>
+            </div>
             <button id="resumeButton">Resume</button>
             <button id="interruptButton" class="danger">Interrupt</button>
           </div>
@@ -95,6 +103,14 @@
       </main>
 
       <aside class="activity">
+        <section class="panel queue-panel">
+          <div class="section-title">
+            <h2>Queue</h2>
+            <span id="queueCount">0</span>
+          </div>
+          <div id="queueList" class="queue-list"></div>
+        </section>
+
         <section class="panel approval-panel">
           <div class="section-title">
             <h2>Approvals</h2>
