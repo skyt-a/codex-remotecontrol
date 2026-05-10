@@ -9,6 +9,7 @@ const state = {
   images: [],
   queue: [],
   approvals: new Map(),
+  awake: null,
   logs: [],
   syncTimer: null,
   approvalSignature: null,
@@ -27,6 +28,8 @@ const els = {
   sandboxSelect: qs("#sandboxSelect"),
   newThreadButton: qs("#newThreadButton"),
   startThreadButton: qs("#startThreadButton"),
+  awakeState: qs("#awakeState"),
+  awakeToggleButton: qs("#awakeToggleButton"),
   threadSearch: qs("#threadSearch"),
   threadSearchButton: qs("#threadSearchButton"),
   threadList: qs("#threadList"),
@@ -102,6 +105,10 @@ function bindEvents() {
     await startThread("");
   });
 
+  els.awakeToggleButton.addEventListener("click", async () => {
+    await setAwake(!state.awake?.enabled);
+  });
+
   els.resumeButton.addEventListener("click", async () => {
     if (!state.threadId) return;
     const data = await api(`/api/thread/${encodeURIComponent(state.threadId)}/resume`, {
@@ -144,7 +151,23 @@ async function loadStatus(options = {}) {
   const data = await api("/api/status");
   state.cwd = data.app.cwd;
   if (!els.cwdInput.value) els.cwdInput.value = data.app.cwd;
+  renderAwake(data.app.awake);
   renderStatus(data.bridge, options);
+}
+
+async function setAwake(enabled) {
+  els.awakeToggleButton.disabled = true;
+  try {
+    const status = await api("/api/awake", {
+      method: "POST",
+      body: { enabled }
+    });
+    renderAwake(status);
+  } catch (error) {
+    log("error", error.message || String(error));
+  } finally {
+    els.awakeToggleButton.disabled = !state.awake?.supported;
+  }
 }
 
 async function loadModels() {
@@ -548,6 +571,25 @@ function renderStatus(status, options = {}) {
   els.bridgeState.textContent = status?.state || "offline";
   reconcileActiveTurn(status);
   renderRunState(options);
+}
+
+function renderAwake(status) {
+  state.awake = status || { supported: false, enabled: false };
+  const panel = els.awakeToggleButton.closest(".awake-control");
+  const supported = Boolean(state.awake.supported);
+  const enabled = Boolean(state.awake.enabled);
+
+  panel.classList.toggle("active", enabled);
+  panel.classList.toggle("unsupported", !supported);
+  els.awakeState.textContent = supported
+    ? enabled ? "on" : "off"
+    : "unsupported";
+  if (state.awake.lastError) els.awakeState.textContent = state.awake.lastError;
+  els.awakeToggleButton.disabled = !supported;
+  els.awakeToggleButton.textContent = enabled ? "Turn off" : "Turn on";
+  els.awakeToggleButton.title = supported
+    ? "Prevent this Mac from sleeping while Codex RemoteControl is running"
+    : "Keep Awake is available on macOS only";
 }
 
 function renderRunState(options = {}) {
