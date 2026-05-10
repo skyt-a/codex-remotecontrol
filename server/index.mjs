@@ -1,10 +1,12 @@
 import { getLanUrls, getRuntimeConfig } from "./config.mjs";
+import { AwakeController } from "./awake.mjs";
 import { CodexBridge } from "./codexBridge.mjs";
 import { createRemoteControlServer } from "./app.mjs";
 
 const config = getRuntimeConfig();
 const bridge = new CodexBridge({ ...config, version: "0.1.0" });
-const server = createRemoteControlServer({ bridge, config });
+const awake = new AwakeController();
+const server = createRemoteControlServer({ bridge, config, awake });
 
 server.listen(config.port, config.host, async () => {
   const address = server.address();
@@ -28,6 +30,7 @@ process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
 async function shutdown() {
+  awake.stop();
   server.close();
   await bridge.stop();
   process.exit(0);
