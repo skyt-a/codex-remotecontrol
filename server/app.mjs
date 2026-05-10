@@ -109,7 +109,7 @@ async function routeApi(req, res, url, bridge, config, clients) {
   const threadRead = url.pathname.match(/^\/api\/thread\/([^/]+)$/);
   if (req.method === "GET" && threadRead) {
     const threadId = decodeURIComponent(threadRead[1]);
-    const result = await bridge.call("thread/read", { threadId, includeTurns: true });
+    const result = await readThreadOrResume(bridge, threadId);
     sendJson(res, 200, result);
     return;
   }
@@ -140,7 +140,7 @@ async function routeApi(req, res, url, bridge, config, clients) {
   if (req.method === "POST" && threadSend) {
     const body = await readJsonBody(req);
     const threadId = decodeURIComponent(threadSend[1]);
-    const result = await bridge.call("turn/start", buildTurnParams(threadId, body));
+    const result = await startTurnOrResume(bridge, threadId, body);
     sendJson(res, 200, result);
     return;
   }
@@ -201,6 +201,30 @@ function buildThreadParams(body, defaultCwd) {
   if (body.baseInstructions) params.baseInstructions = body.baseInstructions;
   if (body.serviceTier) params.serviceTier = body.serviceTier;
   return params;
+}
+
+async function readThreadOrResume(bridge, threadId) {
+  try {
+    return await bridge.call("thread/read", { threadId, includeTurns: true });
+  } catch (error) {
+    if (!isThreadNotFound(error)) throw error;
+    return bridge.call("thread/resume", { threadId });
+  }
+}
+
+async function startTurnOrResume(bridge, threadId, body) {
+  const turnParams = buildTurnParams(threadId, body);
+  try {
+    return await bridge.call("turn/start", turnParams);
+  } catch (error) {
+    if (!isThreadNotFound(error)) throw error;
+    await bridge.call("thread/resume", { threadId });
+    return bridge.call("turn/start", turnParams);
+  }
+}
+
+function isThreadNotFound(error) {
+  return /thread not found/i.test(error?.message || String(error));
 }
 
 function buildTurnParams(threadId, body) {
@@ -372,6 +396,7 @@ function sendText(res, status, text) {
 export const internals = {
   buildThreadParams,
   buildTurnParams,
+  isThreadNotFound,
   buildApprovalResponse,
   stripNulls,
   isAuthorized

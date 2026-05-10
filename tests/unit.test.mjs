@@ -39,3 +39,8 @@ test("permission approval preserves requested primitive values", () => {
 test("token redaction removes repeated token values", () => {
   assert.equal(redactToken("abc secret abc secret", "secret"), "abc [token] abc [token]");
 });
+
+test("thread not found detection matches Codex app-server errors", () => {
+  assert.equal(internals.isThreadNotFound(new Error("thread not found: 019e1186-ad47-7181-b9d3-7064a1e4e8f5")), true);
+  assert.equal(internals.isThreadNotFound(new Error("model list failed")), false);
+});
