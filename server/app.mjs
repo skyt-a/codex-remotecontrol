@@ -2,6 +2,7 @@ import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, isAbsolute, join, normalize, resolve } from "node:path";
 import { URL } from "node:url";
+import { createDisabledAwakeController } from "./awake.mjs";
 import { redactToken, VERSION } from "./config.mjs";
 
 const MAX_BODY_BYTES = 12 * 1024 * 1024;
@@ -28,7 +29,7 @@ const MIME_TYPES = {
   ".ico": "image/x-icon"
 };
 
-export function createRemoteControlServer({ bridge, config }) {
+export function createRemoteControlServer({ bridge, config, awake = createDisabledAwakeController() }) {
   const clients = new Set();
 
   bridge.on("event", (event) => {
@@ -56,7 +57,7 @@ export function createRemoteControlServer({ bridge, config }) {
           sendJson(res, 403, { error: "Invalid or missing token." });
           return;
         }
-        await routeApi(req, res, url, bridge, config, clients);
+        await routeApi(req, res, url, bridge, config, clients, awake);
         return;
       }
 
@@ -67,7 +68,7 @@ export function createRemoteControlServer({ bridge, config }) {
   });
 }
 
-async function routeApi(req, res, url, bridge, config, clients) {
+async function routeApi(req, res, url, bridge, config, clients, awake) {
   if (req.method === "GET" && url.pathname === "/api/local-image") {
     serveLocalImage(req, res, url);
     return;
@@ -78,7 +79,8 @@ async function routeApi(req, res, url, bridge, config, clients) {
       app: {
         name: "codex-remotecontrol",
         version: VERSION,
-        cwd: config.cwd
+        cwd: config.cwd,
+        awake: awake.getStatus()
       },
       bridge: bridge.getStatus(),
       connectedBrowsers: clients.size
@@ -97,6 +99,19 @@ async function routeApi(req, res, url, bridge, config, clients) {
     clients.add(res);
     req.on("close", () => clients.delete(res));
     return;
+  }
+
+  if (url.pathname === "/api/awake") {
+    if (req.method === "GET") {
+      sendJson(res, 200, awake.getStatus());
+      return;
+    }
+    if (req.method === "POST") {
+      const body = await readJsonBody(req);
+      const status = body.enabled ? awake.start() : awake.stop();
+      sendJson(res, 200, status);
+      return;
+    }
   }
 
   if (req.method === "GET" && url.pathname === "/api/models") {
