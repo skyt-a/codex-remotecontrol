@@ -3,9 +3,11 @@ const state = {
   cwd: "",
   threadId: null,
   activeTurnId: null,
+  turnPending: false,
   items: new Map(),
   deltas: new Map(),
   images: [],
+  queue: [],
   approvals: new Map(),
   logs: []
 };
@@ -28,6 +30,7 @@ const els = {
   threadTitle: qs("#threadTitle"),
   resumeButton: qs("#resumeButton"),
   interruptButton: qs("#interruptButton"),
+  thinkingIndicator: qs("#thinkingIndicator"),
   transcript: qs("#transcript"),
   composer: qs("#composer"),
   messageInput: qs("#messageInput"),
@@ -36,6 +39,8 @@ const els = {
   clearImagesButton: qs("#clearImagesButton"),
   sendButton: qs("#sendButton"),
   attachmentList: qs("#attachmentList"),
+  queueList: qs("#queueList"),
+  queueCount: qs("#queueCount"),
   approvalList: qs("#approvalList"),
   approvalCount: qs("#approvalCount"),
   logList: qs("#logList"),
@@ -54,6 +59,9 @@ async function boot() {
 
   bindEvents();
   renderTranscript();
+  renderAttachments();
+  renderQueue();
+  renderRunState();
   connectEvents();
   await refreshAll();
 }
@@ -108,19 +116,7 @@ function bindEvents() {
     log("warn", "interrupt requested");
   });
 
-  els.composer.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const text = els.messageInput.value.trim();
-    if (!text && state.images.length === 0) return;
-    if (!state.threadId) {
-      await startThread(text);
-    } else {
-      await sendMessage(state.threadId, text);
-    }
-    els.messageInput.value = "";
-    state.images = [];
-    renderAttachments();
-  });
+  els.composer.addEventListener("submit", handleComposerSubmit);
 
   els.attachButton.addEventListener("click", () => els.imageInput.click());
   els.clearImagesButton.addEventListener("click", () => {
@@ -172,45 +168,177 @@ async function loadApprovals() {
   renderApprovals();
 }
 
+async function handleComposerSubmit(event) {
+  event.preventDefault();
+  const draft = createDraft();
+  if (!hasDraftContent(draft)) return;
+
+  clearComposerDraft();
+  if (isBusy()) {
+    enqueueDraft(draft);
+    return;
+  }
+
+  try {
+    await deliverDraft(draft);
+  } catch (error) {
+    enqueueDraft(draft);
+    log("error", error.message || String(error));
+  }
+}
+
 async function openThread(threadId) {
   const data = await api(`/api/thread/${encodeURIComponent(threadId)}`);
   ingestThread(data.thread);
   await loadThreads();
 }
 
-async function startThread(text) {
-  const data = await api("/api/thread/start", {
-    method: "POST",
-    body: {
-      ...settingsPayload(),
-      text,
-      images: state.images
-    }
-  });
-  const thread = data.thread;
-  if (thread?.id) {
-    ingestThread(thread);
-    await loadThreads();
+async function deliverDraft(draft) {
+  const targetThreadId = draft.threadId || state.threadId;
+  if (!targetThreadId) {
+    await startThread(draft);
+  } else {
+    if (targetThreadId !== state.threadId) await openThread(targetThreadId);
+    await sendMessage(targetThreadId, draft);
   }
 }
 
-async function sendMessage(threadId, text) {
+async function startThread(input, images = []) {
+  const draft = normalizeDraft(input, images);
+  state.turnPending = hasDraftContent(draft);
+  renderRunState();
+  try {
+    const data = await api("/api/thread/start", {
+      method: "POST",
+      body: {
+        ...settingsPayload(),
+        text: draft.text,
+        images: draft.images
+      }
+    });
+    const thread = data.thread;
+    if (thread?.id) {
+      ingestThread(thread);
+      await loadThreads();
+    }
+    if (data.turn?.id) state.activeTurnId = data.turn.id;
+  } finally {
+    state.turnPending = false;
+    renderRunState();
+  }
+}
+
+async function sendMessage(threadId, input, images = []) {
+  const draft = normalizeDraft(input, images);
   const outgoing = {
     type: "userMessage",
-    id: `local-${Date.now()}`,
-    content: [{ type: "text", text, text_elements: [] }, ...state.images.map((image) => ({ type: "image", url: image.url }))]
+    id: nextLocalId("local"),
+    content: [
+      ...(draft.text ? [{ type: "text", text: draft.text, text_elements: [] }] : []),
+      ...draft.images.map((image) => ({ type: "image", url: image.url, name: image.name }))
+    ]
   };
   upsertItem(outgoing);
   renderTranscript();
-  const data = await api(`/api/thread/${encodeURIComponent(threadId)}/send`, {
-    method: "POST",
-    body: {
-      ...settingsPayload(),
-      text,
-      images: state.images
-    }
+  state.turnPending = true;
+  renderRunState();
+  try {
+    const data = await api(`/api/thread/${encodeURIComponent(threadId)}/send`, {
+      method: "POST",
+      body: {
+        ...settingsPayload(),
+        text: draft.text,
+        images: draft.images
+      }
+    });
+    if (data.turn?.id) state.activeTurnId = data.turn.id;
+  } catch (error) {
+    state.items.delete(outgoing.id);
+    renderTranscript();
+    throw error;
+  } finally {
+    state.turnPending = false;
+    renderRunState();
+  }
+}
+
+function createDraft() {
+  return normalizeDraft({
+    text: els.messageInput.value.trim(),
+    images: state.images,
+    threadId: state.threadId,
+    createdAt: Date.now()
   });
-  if (data.turn?.id) state.activeTurnId = data.turn.id;
+}
+
+function normalizeDraft(input, images = []) {
+  if (input && typeof input === "object") {
+    return {
+      id: input.id || nextLocalId("draft"),
+      text: String(input.text || "").trim(),
+      images: (input.images || []).map(cloneImage).filter((image) => image.url),
+      threadId: input.threadId || null,
+      createdAt: input.createdAt || Date.now()
+    };
+  }
+
+  return {
+    id: nextLocalId("draft"),
+    text: String(input || "").trim(),
+    images: (images || []).map(cloneImage).filter((image) => image.url),
+    threadId: state.threadId,
+    createdAt: Date.now()
+  };
+}
+
+function cloneImage(image) {
+  return {
+    name: image?.name || "image",
+    url: image?.url || ""
+  };
+}
+
+function hasDraftContent(draft) {
+  return Boolean(String(draft?.text || "").trim()) || (draft?.images || []).length > 0;
+}
+
+function clearComposerDraft() {
+  els.messageInput.value = "";
+  state.images = [];
+  renderAttachments();
+}
+
+function enqueueDraft(draft) {
+  state.queue.push(normalizeDraft(draft));
+  renderQueue();
+  log("info", "message queued");
+}
+
+async function sendQueuedMessage(id) {
+  const index = state.queue.findIndex((draft) => draft.id === id);
+  if (index < 0) return;
+  const [draft] = state.queue.splice(index, 1);
+  renderQueue();
+  try {
+    await deliverDraft(draft);
+  } catch (error) {
+    state.queue.splice(index, 0, draft);
+    renderQueue();
+    throw error;
+  }
+}
+
+function removeQueuedMessage(id) {
+  state.queue = state.queue.filter((draft) => draft.id !== id);
+  renderQueue();
+}
+
+function isBusy() {
+  return Boolean(state.activeTurnId || state.turnPending);
+}
+
+function nextLocalId(prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function settingsPayload() {
@@ -278,13 +406,17 @@ function handleNotification(note) {
       break;
     case "turn/started":
       state.activeTurnId = params.turn?.id || null;
+      state.turnPending = false;
       for (const item of params.turn?.items || []) upsertItem(item);
       renderTranscript();
+      renderRunState();
       break;
     case "turn/completed":
       state.activeTurnId = null;
+      state.turnPending = false;
       for (const item of params.turn?.items || []) upsertItem(item);
       renderTranscript();
+      renderRunState();
       loadThreads();
       break;
     case "item/started":
@@ -316,12 +448,19 @@ function handleNotification(note) {
 
 function ingestThread(thread) {
   if (!thread) return;
+  const previousThreadId = state.threadId;
   state.threadId = thread.id;
   state.items.clear();
   state.deltas.clear();
   els.threadTitle.textContent = thread.name || thread.preview || thread.id;
   for (const turn of thread.turns || []) {
     for (const item of turn.items || []) upsertItem(item);
+  }
+  if (!previousThreadId) {
+    for (const draft of state.queue) {
+      if (!draft.threadId) draft.threadId = thread.id;
+    }
+    renderQueue();
   }
   renderTranscript();
   renderThreadButtons();
@@ -370,13 +509,21 @@ function appendDelta(itemId, type, delta) {
 
 function renderStatus(status) {
   els.bridgeState.textContent = status?.state || "offline";
+  renderRunState();
+}
+
+function renderRunState() {
+  const busy = isBusy();
+  els.thinkingIndicator.classList.toggle("hidden", !busy);
+  els.sendButton.textContent = busy ? "Queue" : "Send";
   renderThreadButtons();
+  renderTranscript();
 }
 
 function renderThreadButtons() {
   const hasThread = Boolean(state.threadId);
   els.resumeButton.disabled = !hasThread;
-  els.interruptButton.disabled = !hasThread;
+  els.interruptButton.disabled = !hasThread || !isBusy();
 }
 
 function renderThreads(threads) {
@@ -403,14 +550,28 @@ function renderThreads(threads) {
 function renderTranscript() {
   els.transcript.textContent = "";
   const items = [...state.items.values()];
-  if (items.length === 0) {
+  if (items.length === 0 && !isBusy()) {
     els.transcript.append(empty(state.threadId ? "Waiting for activity" : "Start or select a thread"));
     return;
   }
   for (const item of items) {
     els.transcript.append(renderItem(item));
   }
+  if (isBusy()) els.transcript.append(renderThinkingItem());
   els.transcript.scrollTop = els.transcript.scrollHeight;
+}
+
+function renderThinkingItem() {
+  const node = document.createElement("article");
+  node.className = "message assistant thinking-message";
+  const header = document.createElement("div");
+  header.className = "message-header";
+  header.append(span("Codex"), span("running"));
+  const body = document.createElement("div");
+  body.className = "message-body";
+  body.innerHTML = `<div class="thinking-line"><span>Thinking</span><span class="thinking-dots" aria-hidden="true"><span></span><span></span><span></span></span></div>`;
+  node.append(header, body);
+  return node;
 }
 
 function renderItem(item) {
@@ -424,6 +585,7 @@ function renderItem(item) {
   const body = document.createElement("div");
   body.className = "message-body";
   body.innerHTML = renderBody(item);
+  enhanceCopyBlocks(body);
 
   node.append(header, body);
   return node;
@@ -457,13 +619,16 @@ function renderBody(item) {
   if (item.type === "userMessage") {
     return (item.content || []).map((part) => {
       if (part.type === "text") return markdown(part.text || "");
-      if (part.type === "image") return `<span class="badge">image</span>`;
-      if (part.type === "localImage") return `<span class="badge">${escapeHtml(part.path)}</span>`;
+      if (part.type === "image" || part.type === "localImage") return renderInlineImage(part);
       return `<span class="badge">${escapeHtml(part.type)}</span>`;
     }).join("\n");
   }
   if (item.type === "agentMessage" || item.type === "plan") return markdown(item.text || "");
   if (item.type === "reasoning") return markdown([...(item.summary || []), ...(item.content || [])].join("\n"));
+  if (item.type === "imageView" || item.type === "imageGeneration") {
+    const gallery = renderImageGallery(item);
+    if (gallery) return gallery;
+  }
   if (item.type === "commandExecution") {
     return collapsedBlock(
       item.status ? `Command · ${item.status}` : "Command",
@@ -496,6 +661,106 @@ function collapsedBlock(title, subtitle, body) {
   const safeSubtitle = subtitle ? `<div class="tool-subtitle">${escapeHtml(subtitle)}</div>` : "";
   const safeBody = body ? `<pre>${escapeHtml(body)}</pre>` : "";
   return `<details class="tool-details"><summary>${escapeHtml(title)}</summary>${safeSubtitle}${safeBody}</details>`;
+}
+
+function enhanceCopyBlocks(root) {
+  for (const pre of root.querySelectorAll("pre")) {
+    if (pre.closest(".copyable-block")) continue;
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "copyable-block";
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "copy-block-button";
+    button.textContent = "Copy";
+    button.setAttribute("aria-label", "Copy text block");
+    button.addEventListener("click", async () => {
+      try {
+        await copyText(pre.textContent || "");
+        flashButton(button, "Copied");
+      } catch (error) {
+        flashButton(button, "Failed");
+        log("error", error.message || String(error));
+      }
+    });
+
+    pre.replaceWith(wrapper);
+    wrapper.append(button, pre);
+  }
+}
+
+async function copyText(text) {
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.append(textarea);
+  textarea.select();
+
+  try {
+    if (!document.execCommand("copy")) throw new Error("Copy failed");
+  } finally {
+    textarea.remove();
+  }
+}
+
+function flashButton(button, label) {
+  const original = button.textContent;
+  button.textContent = label;
+  button.disabled = true;
+  window.setTimeout(() => {
+    button.textContent = original;
+    button.disabled = false;
+  }, 1100);
+}
+
+function renderInlineImage(part) {
+  const src = safeImageSource(part?.url || part?.image_url || part?.data_url || part?.src);
+  const label = part?.name || part?.path || "image";
+  if (!src) return `<span class="badge">${escapeHtml(label)}</span>`;
+  return `<figure class="inline-image"><img src="${escapeHtml(src)}" alt="${escapeHtml(label)}"><figcaption>${escapeHtml(label)}</figcaption></figure>`;
+}
+
+function renderImageGallery(value) {
+  const images = collectImages(value).slice(0, 12);
+  if (images.length === 0) return "";
+  return `<div class="inline-image-grid">${images.map(renderInlineImage).join("")}</div>`;
+}
+
+function collectImages(value, seen = new Set()) {
+  if (!value || typeof value !== "object" || seen.has(value)) return [];
+  seen.add(value);
+
+  const found = [];
+  const src = safeImageSource(value.url || value.image_url || value.data_url || value.src);
+  if (src) found.push({ url: src, name: value.name || value.path || "image" });
+
+  const entries = Array.isArray(value) ? value : Object.values(value);
+  for (const entry of entries) {
+    found.push(...collectImages(entry, seen));
+  }
+
+  const unique = new Map();
+  for (const image of found) {
+    if (!unique.has(image.url)) unique.set(image.url, image);
+  }
+  return [...unique.values()];
+}
+
+function safeImageSource(value) {
+  const src = String(value || "");
+  if (/^data:image\/[a-z0-9.+-]+;base64,/i.test(src)) return src;
+  if (/^https?:\/\//i.test(src)) return src;
+  if (/^blob:/i.test(src)) return src;
+  return "";
 }
 
 function renderApprovals() {
@@ -561,11 +826,90 @@ function approvalSummary(approval) {
 
 function renderAttachments() {
   els.attachmentList.textContent = "";
-  for (const image of state.images) {
-    const chip = document.createElement("span");
-    chip.className = "attachment-chip";
-    chip.textContent = image.name;
-    els.attachmentList.append(chip);
+  els.clearImagesButton.disabled = state.images.length === 0;
+  for (const [index, image] of state.images.entries()) {
+    const card = document.createElement("div");
+    card.className = "attachment-card";
+
+    const preview = document.createElement("img");
+    preview.src = image.url;
+    preview.alt = image.name;
+    preview.loading = "lazy";
+
+    const meta = document.createElement("div");
+    meta.className = "attachment-meta";
+    meta.textContent = image.name;
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "remove-attachment";
+    remove.textContent = "Remove";
+    remove.addEventListener("click", () => {
+      state.images.splice(index, 1);
+      renderAttachments();
+    });
+
+    card.append(preview, meta, remove);
+    els.attachmentList.append(card);
+  }
+}
+
+function renderQueue() {
+  els.queueCount.textContent = String(state.queue.length);
+  els.queueList.textContent = "";
+  if (state.queue.length === 0) {
+    els.queueList.append(empty("No queued messages"));
+    return;
+  }
+
+  for (const draft of state.queue) {
+    const card = document.createElement("div");
+    card.className = "queue-card";
+
+    const body = document.createElement("div");
+    body.className = "queue-body";
+    const preview = document.createElement("div");
+    preview.className = "queue-preview";
+    preview.textContent = draft.text || `${draft.images.length} image attachment${draft.images.length === 1 ? "" : "s"}`;
+    const meta = document.createElement("div");
+    meta.className = "queue-meta";
+    meta.textContent = `${formatClock(draft.createdAt)} · ${draft.images.length} image${draft.images.length === 1 ? "" : "s"}`;
+    body.append(preview, meta);
+
+    if (draft.images.length > 0) {
+      const thumbs = document.createElement("div");
+      thumbs.className = "queue-thumbs";
+      for (const image of draft.images.slice(0, 4)) {
+        const thumb = document.createElement("img");
+        thumb.src = image.url;
+        thumb.alt = image.name;
+        thumb.loading = "lazy";
+        thumbs.append(thumb);
+      }
+      body.append(thumbs);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "queue-actions";
+    const sendNow = document.createElement("button");
+    sendNow.type = "button";
+    sendNow.textContent = "Send now";
+    sendNow.addEventListener("click", async () => {
+      try {
+        await sendQueuedMessage(draft.id);
+      } catch (error) {
+        log("error", error.message || String(error));
+      }
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "danger";
+    remove.textContent = "Remove";
+    remove.addEventListener("click", () => removeQueuedMessage(draft.id));
+    actions.append(sendNow, remove);
+
+    card.append(body, actions);
+    els.queueList.append(card);
   }
 }
 
