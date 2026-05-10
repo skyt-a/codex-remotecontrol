@@ -1,5 +1,7 @@
 # codex-remotecontrol
 
+[日本語 README](README.ja.md)
+
 `codex-remotecontrol` is a small web app for controlling local Codex app-server sessions from a browser on the same machine or LAN.
 
 It starts Codex app-server on loopback, exposes only a token-protected Node bridge to the network, and provides a mobile-friendly UI for threads, turns, streaming output, approvals, model selection, sandbox settings, and image input.
