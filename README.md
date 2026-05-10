@@ -11,6 +11,7 @@ It starts Codex app-server on loopback, exposes only a token-protected Node brid
 - Node.js 22 or newer
 - Codex CLI with `codex app-server`
 - A trusted local network
+- macOS for the Keep Awake toggle
 
 Check the Codex side first:
 
@@ -33,6 +34,12 @@ http://192.168.x.x:8787/?token=...
 ```
 
 Open the LAN URL from your phone or another browser on the same network.
+
+## Keep Awake
+
+Turn on `Keep Awake` in the sidebar to run `caffeinate -ims` on the Mac hosting this app. This prevents idle system sleep while Codex RemoteControl is running.
+
+This does not wake a Mac that is already asleep. It only keeps the Mac awake after the web app is reachable. The keep-awake process is stopped when the server exits.
 
 ## Configuration
 
