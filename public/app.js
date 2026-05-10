@@ -9,7 +9,8 @@ const state = {
   images: [],
   queue: [],
   approvals: new Map(),
-  logs: []
+  logs: [],
+  syncTimer: null
 };
 
 const els = {
@@ -63,6 +64,7 @@ async function boot() {
   renderQueue();
   renderRunState();
   connectEvents();
+  startRuntimeSync();
   await refreshAll();
 }
 
@@ -73,6 +75,7 @@ function bindEvents() {
       localStorage.setItem("codexRemoteToken", state.token);
       els.tokenPanel.classList.add("hidden");
       connectEvents();
+      startRuntimeSync();
       refreshAll();
     }
   });
@@ -166,6 +169,17 @@ async function loadApprovals() {
   state.approvals.clear();
   for (const request of data.data || []) state.approvals.set(request.id, request);
   renderApprovals();
+  renderRunState();
+}
+
+function startRuntimeSync() {
+  if (state.syncTimer) window.clearInterval(state.syncTimer);
+  state.syncTimer = window.setInterval(syncRuntimeState, 3500);
+}
+
+async function syncRuntimeState() {
+  if (!state.token || document.hidden) return;
+  await Promise.allSettled([loadStatus(), loadApprovals()]);
 }
 
 async function handleComposerSubmit(event) {
@@ -379,12 +393,14 @@ function handleBridgeEvent(event) {
   if (event.type === "approval") {
     state.approvals.set(event.payload.id, event.payload);
     renderApprovals();
+    renderRunState();
     log("warn", `${event.payload.method} is waiting`);
     return;
   }
   if (event.type === "approvalResolved") {
     state.approvals.delete(String(event.payload.id));
     renderApprovals();
+    renderRunState();
     return;
   }
   if (event.type === "notification") {
@@ -394,7 +410,8 @@ function handleBridgeEvent(event) {
 
 function handleNotification(note) {
   const params = note.params || {};
-  if (params.threadId && state.threadId && params.threadId !== state.threadId) {
+  const noteThreadId = notificationThreadId(note);
+  if (noteThreadId && state.threadId && noteThreadId !== state.threadId) {
     log("info", note.method);
     return;
   }
@@ -405,7 +422,7 @@ function handleNotification(note) {
       loadThreads();
       break;
     case "turn/started":
-      state.activeTurnId = params.turn?.id || null;
+      state.activeTurnId = params.turn?.id || params.turnId || null;
       state.turnPending = false;
       for (const item of params.turn?.items || []) upsertItem(item);
       renderTranscript();
@@ -444,6 +461,15 @@ function handleNotification(note) {
     default:
       log("info", note.method);
   }
+}
+
+function notificationThreadId(note) {
+  const params = note.params || {};
+  return params.threadId
+    || params.thread?.id
+    || params.turn?.threadId
+    || params.item?.threadId
+    || null;
 }
 
 function ingestThread(thread) {
@@ -509,15 +535,30 @@ function appendDelta(itemId, type, delta) {
 
 function renderStatus(status) {
   els.bridgeState.textContent = status?.state || "offline";
+  reconcileActiveTurn(status);
   renderRunState();
 }
 
 function renderRunState() {
   const busy = isBusy();
+  const approvalCount = state.approvals.size;
   els.thinkingIndicator.classList.toggle("hidden", !busy);
+  els.thinkingIndicator.classList.toggle("approval-needed", approvalCount > 0);
+  if (els.thinkingIndicator.firstElementChild) {
+    els.thinkingIndicator.firstElementChild.textContent = approvalCount > 0 ? "Approval needed" : "Thinking";
+  }
   els.sendButton.textContent = busy ? "Queue" : "Send";
   renderThreadButtons();
   renderTranscript();
+}
+
+function reconcileActiveTurn(status) {
+  if (!state.threadId || !state.activeTurnId || state.turnPending || !Array.isArray(status?.activeTurns)) return;
+  const isStillActive = status.activeTurns.some((turn) => {
+    if (Array.isArray(turn)) return turn[0] === state.threadId && (!turn[1] || turn[1] === state.activeTurnId);
+    return turn?.threadId === state.threadId && (!turn?.turnId || turn.turnId === state.activeTurnId);
+  });
+  if (!isStillActive && state.approvals.size === 0) state.activeTurnId = null;
 }
 
 function renderThreadButtons() {
@@ -557,19 +598,41 @@ function renderTranscript() {
   for (const item of items) {
     els.transcript.append(renderItem(item));
   }
+  if (state.approvals.size > 0) els.transcript.append(renderApprovalNotice());
   if (isBusy()) els.transcript.append(renderThinkingItem());
   els.transcript.scrollTop = els.transcript.scrollHeight;
 }
 
 function renderThinkingItem() {
+  const approvalCount = state.approvals.size;
   const node = document.createElement("article");
   node.className = "message assistant thinking-message";
   const header = document.createElement("div");
   header.className = "message-header";
-  header.append(span("Codex"), span("running"));
+  header.append(span("Codex"), span(approvalCount > 0 ? "approval required" : "running"));
   const body = document.createElement("div");
   body.className = "message-body";
-  body.innerHTML = `<div class="thinking-line"><span>Thinking</span><span class="thinking-dots" aria-hidden="true"><span></span><span></span><span></span></span></div>`;
+  body.innerHTML = approvalCount > 0
+    ? `<div class="thinking-line approval-needed"><span>Waiting for approval</span></div>`
+    : `<div class="thinking-line"><span>Thinking</span><span class="thinking-dots" aria-hidden="true"><span></span><span></span><span></span></span></div>`;
+  node.append(header, body);
+  return node;
+}
+
+function renderApprovalNotice() {
+  const node = document.createElement("article");
+  node.className = "message assistant approval-message";
+
+  const header = document.createElement("div");
+  header.className = "message-header";
+  header.append(span("Approval"), span(`${state.approvals.size} waiting`));
+
+  const body = document.createElement("div");
+  body.className = "message-body approval-inline-list";
+  for (const approval of state.approvals.values()) {
+    body.append(renderApprovalCard(approval));
+  }
+
   node.append(header, body);
   return node;
 }
@@ -800,32 +863,36 @@ function renderApprovals() {
   }
 
   for (const approval of approvals) {
-    const card = document.createElement("div");
-    card.className = "approval-card";
-
-    const body = document.createElement("div");
-    body.className = "approval-body";
-    body.append(strong(approval.method));
-    const detail = document.createElement("pre");
-    detail.textContent = approvalSummary(approval);
-    body.append(detail);
-
-    const textarea = document.createElement("textarea");
-    textarea.rows = 3;
-    textarea.placeholder = "Optional JSON response";
-
-    const actions = document.createElement("div");
-    actions.className = "approval-actions";
-    actions.append(
-      approvalButton("Accept", "accept", approval, textarea),
-      approvalButton("Session", "acceptForSession", approval, textarea),
-      approvalButton("Decline", "decline", approval, textarea),
-      approvalButton("Cancel", "cancel", approval, textarea)
-    );
-
-    card.append(body, textarea, actions);
-    els.approvalList.append(card);
+    els.approvalList.append(renderApprovalCard(approval));
   }
+}
+
+function renderApprovalCard(approval) {
+  const card = document.createElement("div");
+  card.className = "approval-card";
+
+  const body = document.createElement("div");
+  body.className = "approval-body";
+  body.append(strong(approval.method));
+  const detail = document.createElement("pre");
+  detail.textContent = approvalSummary(approval);
+  body.append(detail);
+
+  const textarea = document.createElement("textarea");
+  textarea.rows = 3;
+  textarea.placeholder = "Optional JSON response";
+
+  const actions = document.createElement("div");
+  actions.className = "approval-actions";
+  actions.append(
+    approvalButton("Accept", "accept", approval, textarea),
+    approvalButton("Session", "acceptForSession", approval, textarea),
+    approvalButton("Decline", "decline", approval, textarea),
+    approvalButton("Cancel", "cancel", approval, textarea)
+  );
+
+  card.append(body, textarea, actions);
+  return card;
 }
 
 function approvalButton(label, decision, approval, textarea) {
@@ -840,6 +907,7 @@ function approvalButton(label, decision, approval, textarea) {
     });
     state.approvals.delete(approval.id);
     renderApprovals();
+    renderRunState();
   });
   return button;
 }
