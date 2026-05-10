@@ -276,6 +276,13 @@ label {
   font-weight: 700;
 }
 
+.thinking-indicator.approval-needed,
+.thinking-line.approval-needed {
+  border-color: #ead0ad;
+  background: #fffaf3;
+  color: var(--warn);
+}
+
 .thinking-dots {
   display: inline-flex;
   gap: 4px;
@@ -357,6 +364,11 @@ label {
 .message.reasoning {
   width: min(920px, 100%);
   background: #fbfcfd;
+}
+
+.message.approval-message {
+  border-color: #ead0ad;
+  background: #fffaf3;
 }
 
 .message-header {
@@ -617,6 +629,11 @@ label {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.approval-inline-list {
+  display: grid;
+  gap: 8px;
 }
 
 .approval-actions button.accept {
