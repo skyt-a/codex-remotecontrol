@@ -27,6 +27,7 @@ export class CodexBridge extends EventEmitter {
       pid: this.proc?.pid || null,
       pendingRequests: this.pending.size,
       pendingApprovals: this.serverRequests.size,
+      activeTurns: [...this.latestTurns.entries()].map(([threadId, turnId]) => ({ threadId, turnId })),
       lastError: this.lastError
     };
   }
@@ -310,11 +311,20 @@ export class CodexBridge extends EventEmitter {
 
   rememberNotification(message) {
     const params = message.params || {};
-    if (message.method === "turn/started" && params.threadId && params.turn?.id) {
-      this.latestTurns.set(params.threadId, params.turn.id);
+    const threadId = notificationThreadId(message);
+    const turnId = params.turn?.id || params.turnId || null;
+
+    if (message.method === "turn/started" && threadId && turnId) {
+      this.latestTurns.set(threadId, turnId);
     }
-    if (message.method === "turn/completed" && params.threadId) {
-      this.latestTurns.delete(params.threadId);
+    if (message.method === "turn/completed") {
+      if (threadId) {
+        this.latestTurns.delete(threadId);
+      } else if (turnId) {
+        for (const [activeThreadId, activeTurnId] of this.latestTurns) {
+          if (activeTurnId === turnId) this.latestTurns.delete(activeThreadId);
+        }
+      }
     }
   }
 
@@ -342,4 +352,13 @@ export class CodexBridge extends EventEmitter {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function notificationThreadId(message) {
+  const params = message.params || {};
+  return params.threadId
+    || params.thread?.id
+    || params.turn?.threadId
+    || params.item?.threadId
+    || null;
 }
