@@ -44,3 +44,11 @@ test("thread not found detection matches Codex app-server errors", () => {
   assert.equal(internals.isThreadNotFound(new Error("thread not found: 019e1186-ad47-7181-b9d3-7064a1e4e8f5")), true);
   assert.equal(internals.isThreadNotFound(new Error("model list failed")), false);
 });
+
+test("local image preview only accepts absolute raster image paths", () => {
+  assert.equal(internals.resolveLocalImagePath("/tmp/example.png"), "/tmp/example.png");
+  assert.equal(internals.resolveLocalImagePath("relative/example.png"), "");
+  assert.equal(internals.localImageContentType("/tmp/example.png"), "image/png");
+  assert.equal(internals.localImageContentType("/tmp/example.jpeg"), "image/jpeg");
+  assert.equal(internals.localImageContentType("/tmp/example.svg"), "");
+});
