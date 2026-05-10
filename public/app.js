@@ -10,7 +10,9 @@ const state = {
   queue: [],
   approvals: new Map(),
   logs: [],
-  syncTimer: null
+  syncTimer: null,
+  approvalSignature: null,
+  runSignature: null
 };
 
 const els = {
@@ -138,11 +140,11 @@ async function refreshAll() {
   await Promise.allSettled([loadStatus(), loadModels(), loadThreads(), loadApprovals()]);
 }
 
-async function loadStatus() {
+async function loadStatus(options = {}) {
   const data = await api("/api/status");
   state.cwd = data.app.cwd;
   if (!els.cwdInput.value) els.cwdInput.value = data.app.cwd;
-  renderStatus(data.bridge);
+  renderStatus(data.bridge, options);
 }
 
 async function loadModels() {
@@ -164,12 +166,18 @@ async function loadThreads() {
   renderThreads(data.data || []);
 }
 
-async function loadApprovals() {
+async function loadApprovals(options = {}) {
   const data = await api("/api/approvals");
-  state.approvals.clear();
-  for (const request of data.data || []) state.approvals.set(request.id, request);
+  const nextApprovals = new Map();
+  for (const request of data.data || []) nextApprovals.set(request.id, request);
+
+  const nextSignature = approvalsSignature(nextApprovals);
+  if (nextSignature === state.approvalSignature) return;
+
+  state.approvals = nextApprovals;
+  state.approvalSignature = nextSignature;
   renderApprovals();
-  renderRunState();
+  renderRunState({ ...options, forceTranscript: true });
 }
 
 function startRuntimeSync() {
@@ -179,7 +187,10 @@ function startRuntimeSync() {
 
 async function syncRuntimeState() {
   if (!state.token || document.hidden) return;
-  await Promise.allSettled([loadStatus(), loadApprovals()]);
+  await Promise.allSettled([
+    loadStatus({ preserveScroll: true }),
+    loadApprovals({ preserveScroll: true })
+  ]);
 }
 
 async function handleComposerSubmit(event) {
@@ -253,7 +264,7 @@ async function sendMessage(threadId, input, images = []) {
     ]
   };
   upsertItem(outgoing);
-  renderTranscript();
+  renderTranscript({ stickToBottom: true });
   state.turnPending = true;
   renderRunState();
   try {
@@ -393,14 +404,14 @@ function handleBridgeEvent(event) {
   if (event.type === "approval") {
     state.approvals.set(event.payload.id, event.payload);
     renderApprovals();
-    renderRunState();
+    renderRunState({ forceTranscript: true });
     log("warn", `${event.payload.method} is waiting`);
     return;
   }
   if (event.type === "approvalResolved") {
     state.approvals.delete(String(event.payload.id));
     renderApprovals();
-    renderRunState();
+    renderRunState({ forceTranscript: true });
     return;
   }
   if (event.type === "notification") {
@@ -488,7 +499,7 @@ function ingestThread(thread) {
     }
     renderQueue();
   }
-  renderTranscript();
+  renderTranscript({ stickToBottom: true });
   renderThreadButtons();
 }
 
@@ -533,15 +544,24 @@ function appendDelta(itemId, type, delta) {
   renderTranscript();
 }
 
-function renderStatus(status) {
+function renderStatus(status, options = {}) {
   els.bridgeState.textContent = status?.state || "offline";
   reconcileActiveTurn(status);
-  renderRunState();
+  renderRunState(options);
 }
 
-function renderRunState() {
+function renderRunState(options = {}) {
   const busy = isBusy();
   const approvalCount = state.approvals.size;
+  const nextRunSignature = [
+    busy ? "busy" : "idle",
+    state.activeTurnId || "",
+    state.turnPending ? "pending" : "settled",
+    approvalCount
+  ].join(":");
+  const runChanged = nextRunSignature !== state.runSignature;
+  state.runSignature = nextRunSignature;
+
   els.thinkingIndicator.classList.toggle("hidden", !busy);
   els.thinkingIndicator.classList.toggle("approval-needed", approvalCount > 0);
   if (els.thinkingIndicator.firstElementChild) {
@@ -549,7 +569,7 @@ function renderRunState() {
   }
   els.sendButton.textContent = busy ? "Queue" : "Send";
   renderThreadButtons();
-  renderTranscript();
+  if (options.forceTranscript || runChanged) renderTranscript(options);
 }
 
 function reconcileActiveTurn(status) {
@@ -588,7 +608,10 @@ function renderThreads(threads) {
   }
 }
 
-function renderTranscript() {
+function renderTranscript(options = {}) {
+  const shouldStickToBottom = options.stickToBottom || isTranscriptNearBottom();
+  const previousScrollTop = els.transcript.scrollTop;
+
   els.transcript.textContent = "";
   const items = [...state.items.values()];
   if (items.length === 0 && !isBusy()) {
@@ -600,7 +623,17 @@ function renderTranscript() {
   }
   if (state.approvals.size > 0) els.transcript.append(renderApprovalNotice());
   if (isBusy()) els.transcript.append(renderThinkingItem());
-  els.transcript.scrollTop = els.transcript.scrollHeight;
+
+  if (shouldStickToBottom) {
+    els.transcript.scrollTop = els.transcript.scrollHeight;
+  } else if (options.preserveScroll !== false) {
+    els.transcript.scrollTop = previousScrollTop;
+  }
+}
+
+function isTranscriptNearBottom() {
+  const distance = els.transcript.scrollHeight - els.transcript.scrollTop - els.transcript.clientHeight;
+  return distance < 48;
 }
 
 function renderThinkingItem() {
@@ -907,7 +940,7 @@ function approvalButton(label, decision, approval, textarea) {
     });
     state.approvals.delete(approval.id);
     renderApprovals();
-    renderRunState();
+    renderRunState({ forceTranscript: true });
   });
   return button;
 }
@@ -917,6 +950,14 @@ function approvalSummary(approval) {
   if (params.command) return `${params.command}\n${params.cwd || ""}\n${params.reason || ""}`.trim();
   if (params.reason) return `${params.reason}\n${compactJson(params.permissions || params)}`;
   return compactJson(params);
+}
+
+function approvalsSignature(approvals) {
+  return JSON.stringify([...approvals.values()].map((approval) => ({
+    id: String(approval.id),
+    method: approval.method || "",
+    params: approval.params || {}
+  })));
 }
 
 function renderAttachments() {
