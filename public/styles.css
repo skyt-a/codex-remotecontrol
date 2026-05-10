@@ -235,7 +235,7 @@ label {
 
 .thread-list,
 .queue-list,
-approval-list,
+.approval-list,
 .log-list {
   display: grid;
   gap: 8px;
